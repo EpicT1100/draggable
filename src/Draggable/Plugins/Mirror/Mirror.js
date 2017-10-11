@@ -1,6 +1,15 @@
+export const defaultOptions = {
+  xAxis: true,
+  yAxis: true,
+};
+
 export default class Mirror {
   constructor(draggable) {
     this.draggable = draggable;
+    this.mirrorOptions = {
+      ...defaultOptions,
+      ...this.draggableMirrorOptions(),
+    };
 
     this._onMirrorCreated = this._onMirrorCreated.bind(this);
     this._onMirrorMove = this._onMirrorMove.bind(this);
@@ -20,26 +29,49 @@ export default class Mirror {
       .off('mirror:move', this._onMirrorMove);
   }
 
+  draggableMirrorOptions() {
+    return this.draggable.options.mirror;
+  }
+
   _onMirrorCreated({mirror, source, sensorEvent}) {
     const mirrorClass = this.draggable.getClassNameFor('mirror');
 
-    const setState = (data) => {
-      this.mirrorOffset = data.mirrorOffset;
-      return data;
+    const setState = ({mirrorOffset, lastX, lastY, ...args}) => {
+      this.mirrorOffset = mirrorOffset;
+      this.lastX = lastX;
+      this.lastY = lastY;
+      return {mirrorOffset, lastX, lastY, ...args};
     };
 
-    Promise.resolve({mirror, source, sensorEvent, mirrorClass})
+    const initialState = {
+      mirror,
+      source,
+      sensorEvent,
+      mirrorClass,
+      options: this.mirrorOptions,
+    };
+
+    Promise.resolve(initialState)
       .then(computeMirrorDimensions)
       .then(calculateMirrorOffset)
       .then(addMirrorClasses)
-      .then(positionMirror())
+      .then(positionMirror({initial: true}))
       .then(removeMirrorID)
       .then(setState)
       .catch();
   }
 
   _onMirrorMove({mirror, sensorEvent}) {
-    Promise.resolve({mirror, sensorEvent, mirrorOffset: this.mirrorOffset})
+    const initialState = {
+      mirror,
+      sensorEvent,
+      mirrorOffset: this.mirrorOffset,
+      options: this.mirrorOptions,
+      lastX: this.lastX,
+      lastY: this.lastY,
+    };
+
+    Promise.resolve(initialState)
       .then(positionMirror({raf: true}))
       .catch();
   }
@@ -51,10 +83,8 @@ function onMirrorCreated({mirror, source}) {
     .catch();
 }
 
-function resetMirror(data) {
+function resetMirror({mirror, source, ...args}) {
   return withPromise((resolve) => {
-    const {mirror, source} = data;
-
     mirror.style.position = 'fixed';
     mirror.style.pointerEvents = 'none';
     mirror.style.top = 0;
@@ -62,56 +92,71 @@ function resetMirror(data) {
     mirror.style.width = `${source.offsetWidth}px`;
     mirror.style.height = `${source.offsetHeight}px`;
 
-    resolve(data);
+    resolve({mirror, source, ...args});
   });
 }
 
-function computeMirrorDimensions(data) {
+function computeMirrorDimensions({source, ...args}) {
   return withPromise((resolve) => {
-    const {source} = data;
     const sourceRect = source.getBoundingClientRect();
-    resolve({...data, sourceRect});
+    resolve({source, sourceRect, ...args});
   });
 }
 
-function calculateMirrorOffset(data) {
+function calculateMirrorOffset({sensorEvent, sourceRect, ...args}) {
   return withPromise((resolve) => {
-    const {sensorEvent, sourceRect} = data;
     const mirrorOffset = {top: sensorEvent.clientY - sourceRect.top, left: sensorEvent.clientX - sourceRect.left};
-    resolve({...data, mirrorOffset});
+    resolve({sensorEvent, sourceRect, mirrorOffset, ...args});
   });
 }
 
-function addMirrorClasses(data) {
+function addMirrorClasses({mirror, mirrorClass, ...args}) {
   return withPromise((resolve) => {
-    const {mirror, mirrorClass} = data;
     mirror.classList.add(mirrorClass);
-    resolve(data);
+    resolve({mirror, mirrorClass, ...args});
   });
 }
 
-function removeMirrorID(data) {
+function removeMirrorID({mirror, ...args}) {
   return withPromise((resolve) => {
-    const {mirror} = data;
     mirror.removeAttribute('id');
     delete mirror.id;
-    resolve(data);
+    resolve({mirror, ...args});
   });
 }
 
-function positionMirror({withFrame = false} = {}) {
-  return (data) => {
+function positionMirror({withFrame = false, initial = false} = {}) {
+  return ({mirror, sensorEvent, mirrorOffset, lastY, lastX, options, ...args}) => {
     return withPromise((resolve) => {
-      const {mirror, sensorEvent, mirrorOffset} = data;
+      const result = {
+        mirror,
+        sensorEvent,
+        mirrorOffset,
+        options,
+        ...args,
+      };
 
       if (mirrorOffset) {
         const x = sensorEvent.clientX - mirrorOffset.left;
         const y = sensorEvent.clientY - mirrorOffset.top;
 
-        mirror.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+        if ((options.xAxis && options.yAxis) || initial) {
+          mirror.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+        } else if (options.xAxis && !options.yAxis) {
+          mirror.style.transform = `translate3d(${x}px, ${lastY}px, 0)`;
+        } else if (options.yAxis && !options.xAxis) {
+          mirror.style.transform = `translate3d(${lastX}px, ${y}px, 0)`;
+        }
+
+        if (initial) {
+          result.lastX = x;
+          result.lastY = y;
+        }
+
+        resolve(result);
       }
 
-      resolve(data);
+      resolve(result);
     }, {frame: withFrame});
   };
 }
